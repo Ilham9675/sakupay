@@ -54,8 +54,12 @@ jobs:
       - name: Check API docs and migrations
         run: |
           curl -fs http://localhost:8080/v3/api-docs | grep -q "SakuPay API"
-          docker compose exec -T db psql -U sakupay -d sakupay -tAc \
-            "SELECT max(version::int) FROM flyway_schema_history WHERE success" | grep -qx "2"
+          # Every migration file in the repo must have been applied successfully
+          expected=$(ls src/main/resources/db/migration/V*.sql | wc -l)
+          applied=$(docker compose exec -T db psql -U sakupay -d sakupay -tAc \
+            "SELECT count(*) FROM flyway_schema_history WHERE success AND version IS NOT NULL")
+          echo "migrations: $applied applied, $expected in the repo"
+          test "$applied" -eq "$expected"
       - name: Register, log in and call a protected endpoint
         run: |
           base=http://localhost:8080/api/v1
