@@ -36,11 +36,11 @@
         <postgresql.version>42.7.14</postgresql.version>
         <log4j2.version>2.25.5</log4j2.version>
         <commons-lang3.version>3.19.0</commons-lang3.version>
-        <springdoc.version>2.8.17</springdoc.version>
-        <openpdf.version>2.0.5</openpdf.version>
-        <bucket4j.version>8.14.0</bucket4j.version>
-        <embedded-postgres.version>2.1.0</embedded-postgres.version>
-        <embedded-postgres-binaries.version>16.9.0</embedded-postgres-binaries.version>
+        <springdoc.version>2.10.0</springdoc.version>
+        <openpdf.version>2.4.0</openpdf.version>
+        <bucket4j.version>8.22.0</bucket4j.version>
+        <embedded-postgres.version>2.2.2</embedded-postgres.version>
+        <embedded-postgres-binaries.version>16.15.0</embedded-postgres-binaries.version>
     </properties>
 
     <dependencies>
