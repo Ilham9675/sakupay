@@ -6,7 +6,37 @@ A digital wallet / mini core banking backend built with Spring Boot. The focus i
 system moves money: a double-entry ledger, transfers that are idempotent and safe under concurrency,
 signed top-up webhooks, fraud rules and an audit trail that cannot be rewritten.
 
-> **Status: Phase 4 (fraud rules and audit) done.** The project is built in public, phase by phase. See the roadmap below.
+> **Status: v1 complete (phases 0-5).** No real money is involved anywhere: balances live in a database and the
+> partner bank is simulated. See [SECURITY.md](SECURITY.md) for the OWASP Top 10 mapping.
+
+![Swagger UI](docs/swagger.jpg)
+
+## Architecture
+
+```mermaid
+flowchart LR
+    client["Client / Swagger UI"] -->|"REST + JWT"| api
+    bank["Partner bank (simulated)"] -->|"HMAC-signed webhook"| api
+    subgraph app["SakuPay (Spring Boot)"]
+        api["Security filters: JWT, CORS, headers, rate limits"]
+        api --> auth["auth: login, refresh rotation"]
+        api --> user["user: PIN, roles, admin"]
+        api --> account["account: accounts, virtual accounts"]
+        api --> transfer["transfer: idempotency, limits"]
+        api --> topup["topup: webhook verification"]
+        api --> statement["statement: JSON, CSV, PDF"]
+        transfer --> fraud["fraud: rules, hold, review"]
+        transfer --> ledger["ledger: double entry, reconciliation"]
+        topup --> ledger
+        fraud --> ledger
+        auth --> audit["audit: insert-only trail"]
+    end
+    ledger --> db[("PostgreSQL 16, schema by Flyway")]
+    audit --> db
+```
+
+Packages follow features; money only ever changes in `LedgerService`, and every movement locks its accounts in one
+global order (customer accounts by id, then internal accounts) so concurrent requests cannot deadlock.
 
 ## Goals
 
@@ -30,7 +60,7 @@ The project is designed to answer five questions with code and tests:
 | Tests | JUnit 5, MockMvc, **Testcontainers** (tests run against a real PostgreSQL) |
 | API docs | springdoc OpenAPI, Swagger UI |
 | Infrastructure | Docker (multi-stage, non-root), Docker Compose, GitHub Actions |
-| Planned | Redis (rate limiting), dependency scanning |
+| Hardening | Bucket4j rate limiting, security headers, Trivy image scan, Dependabot |
 
 ## API (v1)
 
@@ -176,6 +206,8 @@ report and the fraud alerts; nobody can change it.
 
 ## Security design
 
+The full OWASP Top 10 mapping, with the known limitations, is in [SECURITY.md](SECURITY.md). Highlights:
+
 | Threat | Control | Proven by |
 |---|---|---|
 | Stolen database dump | Passwords and PINs are BCrypt hashes; refresh tokens are stored only as SHA-256 hashes | `AuthenticationTest`, `PinTest` |
@@ -197,6 +229,9 @@ report and the fraud alerts; nobody can change it.
 | IDOR (reading someone else's account) | The owner is part of the database query; another user's account and a non-existent one give the identical `404` | `AccountTest.anotherUsersAccountLooksExactlyLikeOneThatDoesNotExist` |
 | Privilege escalation | Registration ignores any `role` field; the first admin comes only from `ADMIN_EMAIL`/`ADMIN_PASSWORD`; admins cannot change their own role | `AuthenticationTest`, `RoleTest` |
 | Insider abuse | Separation of duties: `ADMIN` manages users but cannot read the audit trail; `AUDITOR` reads it and nothing else | `RoleTest` |
+| Password guessing, credential stuffing | Login budgets per client address and per e-mail (token buckets), checked before the password; registration and transfers are rate limited too | `RateLimitTest` |
+| Browser-side attacks | CSP, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`; CORS closed unless origins are configured | `HardeningTest` |
+| Vulnerable dependencies | Trivy scans the built image in CI (fails on fixable HIGH/CRITICAL library issues); Dependabot weekly; third-party actions pinned to a commit | `.github/workflows/ci.yml` |
 | Weak configuration | The app refuses to start without a `JWT_SECRET` of at least 32 bytes; secrets are masked in `toString()` | `RulesTest.theAppRefusesToStartWithAWeakJwtSecret` |
 
 ## Running locally
@@ -211,6 +246,16 @@ docker compose up --build
 - Swagger UI: http://localhost:8080/swagger-ui.html
 - An admin is created from `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env`
 - Health: http://localhost:8080/actuator/health
+
+### Without Docker or a database
+
+```bash
+set -a; . ./.env.example; set +a
+mvn spring-boot:test-run
+```
+
+`TestSakuPayApplication` starts the app with a throwaway PostgreSQL 16 (embedded binaries, or Testcontainers when
+Docker is running). The database is empty on every start; the admin from `.env.example` is created again.
 
 ### From the IDE or Maven
 
@@ -233,6 +278,8 @@ mvn spring-boot:run
 | `JWT_SECRET` | (none, required) | Signs access tokens; at least 32 bytes (`openssl rand -base64 48`) |
 | `TOPUP_WEBHOOK_SECRET` | (none, required) | Shared with the partner bank to sign top-up webhooks; at least 32 bytes |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | (none) | Creates the first `ADMIN` on startup if that user does not exist |
+| `CORS_ALLOWED_ORIGINS` | (none) | Browser front-ends allowed to call the API, comma separated; empty means none |
+| `API_DOCS_ENABLED` | `true` | Set to `false` to hide Swagger UI and the OpenAPI document |
 | `PORT` | `8080` | HTTP port |
 
 ## Tests
@@ -241,7 +288,7 @@ mvn spring-boot:run
 mvn verify
 ```
 
-95 tests, all against a real PostgreSQL 16 (never H2): Testcontainers starts it when Docker is available
+100 tests, all against a real PostgreSQL 16 (never H2): Testcontainers starts it when Docker is available
 (always in CI), otherwise [embedded-postgres](https://github.com/zonkyio/embedded-postgres) runs the same
 PostgreSQL 16 binaries as a local process. CI fails if any test was skipped.
 
@@ -275,8 +322,10 @@ PostgreSQL 16 binaries as a local process. CI fails if any test was skipped.
 - [x] **Phase 3: Top-up and statements.** Virtual accounts, HMAC-SHA256 signed webhooks with replay
       protection, paginated statements, CSV/PDF export
 - [x] **Phase 4: Fraud and audit.** Rule-based fraud detection, `ON_HOLD` review flow, audit endpoints
-- [ ] **Phase 5: Hardening.** Rate limiting, security headers, dependency scanning, `SECURITY.md` mapped
+- [x] **Phase 5: Hardening.** Rate limiting, security headers, CORS, dependency scanning, `SECURITY.md` mapped
       to the OWASP Top 10
+- [ ] **Later (optional).** Explanations of fraud holds in plain Indonesian, QR payments, outbox + notifications,
+      metrics (Prometheus/Grafana), a small web front-end
 
 ## License
 

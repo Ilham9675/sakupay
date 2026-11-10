@@ -1,6 +1,8 @@
 package com.sakupay.transfer;
 
 import com.sakupay.auth.CurrentUser;
+import com.sakupay.common.ratelimit.RateLimitProperties;
+import com.sakupay.common.ratelimit.RateLimiter;
 import com.sakupay.transfer.TransferDtos.DepositRequest;
 import com.sakupay.transfer.TransferDtos.TransactionResponse;
 import com.sakupay.transfer.TransferDtos.TransferRequest;
@@ -30,9 +32,13 @@ public class TransferController {
     static final String REPLAYED = "Idempotent-Replayed";
 
     private final TransferService transferService;
+    private final RateLimiter rateLimiter;
+    private final RateLimitProperties limits;
 
-    public TransferController(TransferService transferService) {
+    public TransferController(TransferService transferService, RateLimiter rateLimiter, RateLimitProperties limits) {
         this.transferService = transferService;
+        this.rateLimiter = rateLimiter;
+        this.limits = limits;
     }
 
     @PostMapping("/api/v1/transfers")
@@ -42,7 +48,9 @@ public class TransferController {
             @Parameter(description = "A unique value per transfer, e.g. a UUID. Retrying with the same key never moves money twice.")
             @RequestHeader(name = IDEMPOTENCY_KEY, required = false) String idempotencyKey,
             @Valid @RequestBody TransferRequest request) {
-        return created(transferService.transfer(CurrentUser.id(jwt), idempotencyKey, request));
+        long userId = CurrentUser.id(jwt);
+        rateLimiter.check("transfers-user", Long.toString(userId), limits.transfersPerUser());
+        return created(transferService.transfer(userId, idempotencyKey, request));
     }
 
     @GetMapping("/api/v1/transfers/{reference}")

@@ -11,6 +11,14 @@ sakupay:
     velocity-max-transfers: 1000
     night-start: "00:00"
     night-end: "00:00"
+  rate-limit:
+    # Tests log in and transfer far faster than a person; RateLimitTest uses the real budgets
+    login-per-ip: { requests: 100000, per: 1m }
+    login-per-email: { requests: 100000, per: 1m }
+    register-per-ip: { requests: 100000, per: 1m }
+    transfers-per-user: { requests: 100000, per: 1m }
+  cors:
+    allowed-origins: https://app.sakupay.test
   bootstrap:
     admin-email: admin@test.local
     admin-password: test-admin-password-123

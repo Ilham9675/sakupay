@@ -29,10 +29,16 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(ApiException.class)
-    ProblemDetail handleApi(ApiException e) {
+    ResponseEntity<ProblemDetail> handleApi(ApiException e) {
         ProblemDetail problem = problem(e.getStatus(), e.getCode(), e.getMessage());
         e.getProperties().forEach(problem::setProperty);
-        return problem;
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(e.getStatus());
+        // 429: the standard header too, so generic HTTP clients back off on their own
+        Object retryAfter = e.getProperties().get(com.sakupay.common.ratelimit.RateLimiter.RETRY_AFTER);
+        if (retryAfter != null) {
+            response.header(HttpHeaders.RETRY_AFTER, retryAfter.toString());
+        }
+        return response.body(problem);
     }
 
     /** A unique constraint hit by a concurrent request (e.g. the same e-mail registered twice at once). */

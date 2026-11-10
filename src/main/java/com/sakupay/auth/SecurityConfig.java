@@ -2,6 +2,7 @@ package com.sakupay.auth;
 
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -21,11 +22,17 @@ import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
+import org.springframework.security.web.header.writers.StaticHeadersWriter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 
 /**
  * Stateless API security: every request carries a short-lived JWT access token; there are no sessions and
@@ -38,7 +45,8 @@ public class SecurityConfig {
     static final String ROLES_CLAIM = "roles";
 
     @Bean
-    SecurityFilterChain apiSecurity(HttpSecurity http, ProblemAuthHandlers handlers) throws Exception {
+    SecurityFilterChain apiSecurity(HttpSecurity http, ProblemAuthHandlers handlers,
+                                    @Value("${sakupay.cors.allowed-origins:}") List<String> allowedOrigins) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -58,8 +66,37 @@ public class SecurityConfig {
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
                         .authenticationEntryPoint(handlers)
                         .accessDeniedHandler(handlers))
-                .exceptionHandling(e -> e.authenticationEntryPoint(handlers).accessDeniedHandler(handlers));
+                .exceptionHandling(e -> e.authenticationEntryPoint(handlers).accessDeniedHandler(handlers))
+                .cors(cors -> cors.configurationSource(corsConfiguration(allowedOrigins)))
+                // On top of Spring Security's defaults (nosniff, X-Frame-Options DENY, Cache-Control no-store, HSTS on HTTPS)
+                .headers(h -> h
+                        // Tight enough for a JSON API, loose enough for the bundled Swagger UI (self-hosted assets only)
+                        .contentSecurityPolicy(csp -> csp.policyDirectives(
+                                "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+                                        + "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+                                        + "frame-ancestors 'none'"))
+                        .referrerPolicy(r -> r.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
+                        .addHeaderWriter(new StaticHeadersWriter("Permissions-Policy",
+                                "camera=(), microphone=(), geolocation=(), payment=()")));
         return http.build();
+    }
+
+    /**
+     * CORS is closed unless origins are listed in {@code CORS_ALLOWED_ORIGINS}. Never "*": a browser on any site
+     * could otherwise drive the API with a token it got hold of. Credentials (cookies) are not allowed at all,
+     * because the API uses bearer tokens only.
+     */
+    static CorsConfigurationSource corsConfiguration(List<String> allowedOrigins) {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(allowedOrigins.stream().map(String::strip).filter(o -> !o.isEmpty()).toList());
+        config.setAllowedMethods(List.of("GET", "POST", "PUT"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key"));
+        config.setExposedHeaders(List.of("Idempotent-Replayed", "Retry-After", "Content-Disposition"));
+        config.setAllowCredentials(false);
+        config.setMaxAge(Duration.ofHours(1));
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/api/**", config);
+        return source;
     }
 
     @Bean

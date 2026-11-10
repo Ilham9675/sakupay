@@ -35,6 +35,11 @@ management:
 
 springdoc:
   paths-to-match: /api/**
+  # Set API_DOCS_ENABLED=false to hide Swagger UI and the OpenAPI document in production
+  api-docs:
+    enabled: ${API_DOCS_ENABLED:true}
+  swagger-ui:
+    enabled: ${API_DOCS_ENABLED:true}
 
 sakupay:
   # Daily limits reset at midnight in this zone
@@ -61,6 +66,14 @@ sakupay:
     night-start: "00:00"           # Rp1.000.000 or more between 00:00 and 04:00 (business zone)
     night-end: "04:00"
     night-amount: 1000000
+  rate-limit:
+    login-per-ip: { requests: 20, per: 1m }
+    login-per-email: { requests: 10, per: 15m }
+    register-per-ip: { requests: 10, per: 1h }
+    transfers-per-user: { requests: 30, per: 1m }
+  cors:
+    # Browser front-ends allowed to call the API, comma separated (e.g. https://app.example.com). Empty = none.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
   accounts:
     max-per-user: 3
     default-daily-limit: 10000000   # Rp10.000.000 per day

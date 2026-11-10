@@ -125,6 +125,28 @@ jobs:
             -d '{"note":"CI approval"}' | jq -e '.status == "APPROVED"'
           curl -fs "$base/transfers/$ref" -H "Authorization: Bearer $token" | jq -e '.status == "COMPLETED"'
           curl -fs "$base/accounts/$b" -H "Authorization: Bearer $token" | jq -e '.balance == 6040000'
+      # The image contains the app jar with every library it ships. Fail on fixable HIGH/CRITICAL library
+      # vulnerabilities; OS packages of the base image are reported but do not block.
+      # Pinned to a commit, not a tag: this action's tags were hijacked in a supply-chain attack in March 2026.
+      - name: Scan the image for vulnerable libraries (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          image-ref: sakupay-app:local
+          vuln-type: library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Report base image vulnerabilities (Trivy, not blocking)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          image-ref: sakupay-app:local
+          vuln-type: os
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+          skip-setup-trivy: true
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

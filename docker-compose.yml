@@ -19,6 +19,8 @@ services:
 
   app:
     build: .
+    # A fixed name, so CI can scan exactly this image
+    image: sakupay-app:local
     depends_on:
       db:
         condition: service_healthy
