@@ -1,0 +1,13 @@
+# Accepted vulnerabilities: each one needs a reason, a check that it still applies, and an exit plan.
+# Review: when moving to Spring Boot 4 (Spring Framework 7.0.9+) both entries below must be deleted.
+
+# Spring Framework 6.2.19, fixed only in 7.0.9 (no open-source 6.2.x fix).
+# Affects rendering view *fragments* into a Server-Sent Events stream. SakuPay has no SSE endpoints and no view
+# rendering: it is a JSON API (no SseEmitter, FragmentsRendering or template engine on the classpath).
+CVE-2026-47890
+GHSA-j9f9-w8pj-32f8
+
+# Spring Framework 6.2.19, fixed only in 7.0.9.
+# Affects XsltView. SakuPay never uses XsltView and has no XSLT processor or template engine on the classpath.
+CVE-2026-47884
+GHSA-pc63-qcmh-9cmg

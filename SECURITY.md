@@ -63,6 +63,7 @@ public issue.
 | Threat | Control | Proven by |
 |---|---|---|
 | A library with a known vulnerability | CI scans the built image with Trivy and fails on fixable HIGH/CRITICAL library findings; Dependabot opens weekly update PRs for Maven, Docker and GitHub Actions | `.github/workflows/ci.yml`, `.github/dependabot.yml` |
+| A framework line that no longer gets free fixes | Spring Boot 3.5 is past its open-source support; patched Tomcat, Jackson, PostgreSQL driver, Log4j API and Commons Lang versions are pinned in `pom.xml`. Two Spring Framework 6.2 issues fixed only in 7.0 (SSE fragment rendering, `XsltView`) are accepted in `.trivyignore` with the reason: SakuPay uses neither feature. The exit plan is the move to Spring Boot 4 | `pom.xml`, `.trivyignore` |
 | A compromised CI action | Third-party actions are pinned to a commit SHA (the Trivy action had its tags hijacked in March 2026) | `.github/workflows/ci.yml` |
 
 ### A07 Identification and Authentication Failures
@@ -112,5 +113,7 @@ Being honest about these is part of the design:
 - **No second factor at login.** The transaction PIN protects money movements, but login is password only.
 - **Client IP behind a proxy.** The audit trail and rate limits use the TCP peer address. Behind a reverse proxy,
   `server.forward-headers-strategy` must be enabled and the proxy trusted, or every request looks like the proxy.
+- **Spring Boot 3.5 is out of open-source support.** Security fixes for third-party libraries are pinned by hand
+  and two unused-feature Spring issues are accepted (see A06). Moving to Spring Boot 4 removes both workarounds.
 - **Base image vulnerabilities are reported, not blocking.** OS packages of the JRE image change upstream; CI shows
   them but only fails on vulnerable application libraries.
