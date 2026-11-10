@@ -3,11 +3,7 @@ package com.sakupay;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -16,10 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
-@AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
-@Testcontainers(disabledWithoutDocker = true)
+@IntegrationTest
 class ApplicationSmokeTest {
 
     @Autowired
@@ -31,7 +24,7 @@ class ApplicationSmokeTest {
     @Test
     void migrationsAreAppliedToPostgres() {
         assertThat(flyway.info().pending()).isEmpty();
-        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("1");
+        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("2");
     }
 
     @Test
@@ -49,9 +42,10 @@ class ApplicationSmokeTest {
     }
 
     @Test
-    void unknownPathsAnswerWithoutInternals() throws Exception {
+    void anonymousRequestsGetAProblemResponseWithoutInternals() throws Exception {
         mvc.perform(get("/api/does-not-exist"))
-                .andExpect(status().isNotFound())
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Exception"))));
     }
 }

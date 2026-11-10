@@ -55,7 +55,20 @@ jobs:
         run: |
           curl -fs http://localhost:8080/v3/api-docs | grep -q "SakuPay API"
           docker compose exec -T db psql -U sakupay -d sakupay -tAc \
-            "SELECT version FROM flyway_schema_history WHERE success" | grep -qx "1"
+            "SELECT max(version::int) FROM flyway_schema_history WHERE success" | grep -qx "2"
+      - name: Register, log in and call a protected endpoint
+        run: |
+          base=http://localhost:8080/api/v1
+          test "$(curl -s -o /dev/null -w '%{http_code}' $base/me)" = "401"
+          curl -fs -X POST $base/auth/register -H 'Content-Type: application/json' \
+            -d '{"fullName":"CI User","email":"ci@example.com","phone":"081200001111","password":"CiPassword123"}'
+          token=$(curl -fs -X POST $base/auth/login -H 'Content-Type: application/json' \
+            -d '{"email":"ci@example.com","password":"CiPassword123"}' | jq -r .accessToken)
+          curl -fs $base/me -H "Authorization: Bearer $token" | jq -e '.role == "USER"'
+          # The bootstrap admin from .env.example exists and can list users
+          admin=$(curl -fs -X POST $base/auth/login -H 'Content-Type: application/json' \
+            -d '{"email":"admin@sakupay.local","password":"local-admin-password-123"}' | jq -r .accessToken)
+          curl -fs "$base/admin/users" -H "Authorization: Bearer $admin" | jq -e '.totalElements >= 2'
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

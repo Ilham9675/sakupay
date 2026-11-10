@@ -26,6 +26,9 @@ services:
       DB_URL: jdbc:postgresql://db:5432/sakupay
       DB_USERNAME: ${DB_USERNAME:-sakupay}
       DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     ports:
       - "${APP_PORT:-8080}:8080"
 

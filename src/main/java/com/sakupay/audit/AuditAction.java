@@ -1,0 +1,17 @@
+package com.sakupay.audit;
+
+public enum AuditAction {
+    USER_REGISTERED,
+    ADMIN_BOOTSTRAPPED,
+    LOGIN_SUCCEEDED,
+    LOGIN_FAILED,
+    TOKEN_REFRESHED,
+    REFRESH_TOKEN_REUSED,
+    LOGGED_OUT,
+    PIN_SET,
+    PIN_FAILED,
+    PIN_LOCKED,
+    PIN_UNLOCKED,
+    ROLE_CHANGED,
+    ACCOUNT_OPENED
+}

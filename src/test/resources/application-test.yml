@@ -1,0 +1,8 @@
+sakupay:
+  security:
+    jwt-secret: test-only-secret-at-least-32-bytes-long
+    # Low cost keeps the suite fast; production uses 12
+    bcrypt-strength: 4
+  bootstrap:
+    admin-email: admin@test.local
+    admin-password: test-admin-password-123

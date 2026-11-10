@@ -35,3 +35,20 @@ management:
 
 springdoc:
   paths-to-match: /api/**
+
+sakupay:
+  security:
+    # Required, at least 32 bytes. Never commit a real value; set JWT_SECRET in the environment / .env
+    jwt-secret: ${JWT_SECRET:}
+    access-token-ttl: 15m
+    refresh-token-ttl: 7d
+    bcrypt-strength: 12
+    pin-max-attempts: 5
+    pin-lock-duration: 30m
+  accounts:
+    max-per-user: 3
+    default-daily-limit: 10000000   # Rp10.000.000 per day
+  bootstrap:
+    # Creates the first ADMIN on startup when both are set and the user does not exist yet
+    admin-email: ${ADMIN_EMAIL:}
+    admin-password: ${ADMIN_PASSWORD:}
