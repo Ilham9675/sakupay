@@ -24,7 +24,7 @@ class ApplicationSmokeTest {
     @Test
     void migrationsAreAppliedToPostgres() {
         assertThat(flyway.info().pending()).isEmpty();
-        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("4");
+        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("5");
     }
 
     @Test

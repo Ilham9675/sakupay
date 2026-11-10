@@ -51,6 +51,7 @@ public class SecurityConfig {
                                 "/v3/api-docs", "/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**",
                                 "/error").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/fraud-alerts/**").hasAnyRole("ADMIN", "AUDITOR")
                         .requestMatchers("/api/v1/audit-logs/**", "/api/v1/reconciliation").hasRole("AUDITOR")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(o -> o

@@ -34,10 +34,11 @@ public final class StatementExports {
     /** UTF-8 with a byte-order mark, so Excel shows the text correctly. */
     public static byte[] csv(Statement s) {
         StringBuilder out = new StringBuilder("﻿");
-        row(out, List.of("Date", "Reference", "Type", "Direction", "Amount", "Balance after", "Counterparty", "Description"));
+        row(out, List.of("Date", "Reference", "Type", "Status", "Direction", "Amount", "Balance after", "Counterparty",
+                "Description"));
         DateTimeFormatter time = TIME.withZone(s.timeZone());
         for (Line l : s.lines()) {
-            row(out, List.of(time.format(l.date()), l.reference(), l.type().name(), l.direction().name(),
+            row(out, List.of(time.format(l.date()), l.reference(), l.type().name(), l.status().name(), l.direction().name(),
                     Long.toString(l.amount()), Long.toString(l.balanceAfter()), nullToEmpty(l.counterparty()),
                     nullToEmpty(l.description())));
         }
@@ -99,7 +100,7 @@ public final class StatementExports {
                 + "   Closing balance Rp" + rupiah.format(s.closingBalance()), bold));
         doc.add(new Paragraph(" "));
 
-        PdfPTable table = new PdfPTable(new float[]{14, 10, 8, 12, 12, 12, 32});
+        PdfPTable table = new PdfPTable(new float[]{14, 14, 6, 12, 12, 12, 30});
         table.setWidthPercentage(100);
         for (String h : List.of("Date", "Type", "D/C", "Amount", "Balance", "Counterparty", "Description")) {
             PdfPCell cell = new PdfPCell(new Phrase(h, bold));
@@ -109,7 +110,9 @@ public final class StatementExports {
         DateTimeFormatter time = TIME.withZone(s.timeZone());
         for (Line l : s.lines()) {
             table.addCell(new Phrase(time.format(l.date()), normal));
-            table.addCell(new Phrase(l.type().name(), normal));
+            String type = l.status() == com.sakupay.ledger.TransactionStatus.COMPLETED
+                    ? l.type().name() : l.type().name() + " (" + l.status() + ")";
+            table.addCell(new Phrase(type, normal));
             table.addCell(new Phrase(l.direction() == com.sakupay.ledger.EntryDirection.CREDIT ? "CR" : "DB", normal));
             table.addCell(right(rupiah.format(l.amount()), normal));
             table.addCell(right(rupiah.format(l.balanceAfter()), normal));

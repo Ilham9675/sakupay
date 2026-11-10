@@ -6,7 +6,7 @@ A digital wallet / mini core banking backend built with Spring Boot. The focus i
 system moves money: a double-entry ledger, transfers that are idempotent and safe under concurrency,
 signed top-up webhooks, fraud rules and an audit trail that cannot be rewritten.
 
-> **Status: Phase 3 (top-ups and statements) done.** The project is built in public, phase by phase. See the roadmap below.
+> **Status: Phase 4 (fraud rules and audit) done.** The project is built in public, phase by phase. See the roadmap below.
 
 ## Goals
 
@@ -51,11 +51,14 @@ with a stable `code` field (e.g. `WRONG_PIN`, `PIN_LOCKED`, `ACCOUNT_NOT_FOUND`)
 | GET | `/accounts/{number}/statement` | owner only | Statement for a period: opening/closing balance, paginated lines |
 | GET | `/accounts/{number}/statement.csv` / `.pdf` | owner only | Download the statement |
 | POST | `/webhooks/topups` | partner bank (HMAC signature, no JWT) | A payment into a virtual account |
-| POST | `/transfers` | owner of the source account | Transfer (PIN, balance, daily limit); needs an `Idempotency-Key` header |
+| POST | `/transfers` | owner of the source account | Transfer (PIN, balance, daily limit, fraud rules); needs an `Idempotency-Key` header |
+| GET | `/transfers/{reference}` | the sender | Current status, e.g. `ON_HOLD` -> `COMPLETED` / `REJECTED` |
 | GET | `/admin/users` | `ADMIN` | List users |
 | POST | `/admin/accounts/{number}/deposits` | `ADMIN` | Record a cash deposit at a teller (idempotent) |
 | PUT | `/admin/users/{id}/role` | `ADMIN` | Change a role (not one's own) |
 | POST | `/admin/users/{id}/pin-unlock` | `ADMIN` | Unlock a locked PIN |
+| GET | `/fraud-alerts` | `ADMIN`, `AUDITOR` | Held transfers and their review status |
+| POST | `/admin/fraud-alerts/{id}/approve` / `reject` | `ADMIN` (not the sender) | Release to the receiver / give back to the sender (reason required) |
 | GET | `/audit-logs` | `AUDITOR` | Search the audit trail |
 | GET | `/reconciliation` | `AUDITOR` | Prove that balances match the ledger and all money sums to zero |
 
@@ -76,8 +79,9 @@ POST /transfers  (Idempotency-Key: 7f3c...)
      a. claim key       INSERT ... ON CONFLICT DO NOTHING  -> same key? return the stored result
      b. lock accounts   SELECT ... FOR UPDATE, lower id first (A->B and B->A cannot deadlock)
      c. check           active, balance >= amount, today's transfers + amount <= daily limit
-     d. post            DEBIT source, CREDIT destination, update both balances
-     e. COMMIT          a deferred trigger rejects the commit if debits != credits
+     d. fraud rules     any hit? move the money to HOLD and open an alert (status ON_HOLD)
+     e. post            otherwise DEBIT source, CREDIT destination, update both balances
+     f. COMMIT          a deferred trigger rejects the commit if debits != credits
 ```
 
 **Double-entry ledger.** Every transaction is at least two `ledger_entries` (one `DEBIT`, one `CREDIT`) of the same
@@ -136,6 +140,40 @@ TOPUP_WEBHOOK_SECRET=local-dev-only-webhook-secret-change-me scripts/simulate-to
 with its running balance and counterparty, the totals and the closing balance, read in one consistent snapshot.
 Days follow the `Asia/Jakarta` business day. The same statement downloads as CSV (UTF-8 with BOM for Excel) or PDF.
 
+## Fraud rules and review
+
+Every transfer is checked while the sender's account is locked, so the facts cannot change between counting and
+deciding:
+
+| Rule | Fires when (defaults, all configurable) | Severity |
+|---|---|---|
+| `LARGE_AMOUNT` | Rp5.000.000 or more in one transfer | HIGH |
+| `NEW_PAYEE_LARGE` | Rp2.000.000 or more to an account this sender never paid before | MEDIUM |
+| `HIGH_VELOCITY` | a 6th transfer within 10 minutes | MEDIUM |
+| `NIGHT_TIME` | Rp1.000.000 or more between 00:00 and 04:00 WIB | LOW |
+
+A transfer that hits a rule is **held, not just flagged**: the amount moves from the sender to the internal `HOLD`
+account in the same transaction, so it cannot be spent twice while it waits, and the response says
+`"status": "ON_HOLD"` with the `holdReasons`. An admin then decides:
+
+```
+transfer      sender  --DEBIT-->  HOLD                        status ON_HOLD,   alert OPEN
+approve       HOLD    --DEBIT-->  receiver                    status COMPLETED, alert APPROVED
+reject        HOLD    --DEBIT-->  sender   (reason required)  status REJECTED,  alert REJECTED
+```
+
+All legs are entries of the same transaction, so reconciliation stays healthy at every step. The alert row is
+locked during a decision (two admins at once: exactly one wins), and an admin cannot review their own transfer.
+Customers never see the HOLD leg: their statement shows the counterparty and the transaction's current status.
+
+## Audit trail
+
+Insert-only at the database level (see V1). Recorded events: registration, login success and failure, token refresh
+and reuse, logout, PIN set / failure / lock / unlock, role changes, account opening, transfers (completed and held),
+deposits, top-ups, rejected webhooks, and every fraud decision with its reason. Each entry has the actor, the
+target, details and the client IP. `AUDITOR` reads it through `GET /audit-logs`, together with the reconciliation
+report and the fraud alerts; nobody can change it.
+
 ## Security design
 
 | Threat | Control | Proven by |
@@ -154,6 +192,8 @@ Days follow the `Asia/Jakarta` business day. The same statement downloads as CSV
 | Replayed or duplicated webhook | 5-minute timestamp window + unique `eventId` claimed with the credit | `TopupWebhookTest.tenSimultaneousDeliveriesOfOneEventCreditOnce` |
 | CSV / formula injection | Statement cells starting with `= + - @` get a leading apostrophe, so a description like `=HYPERLINK(...)` typed by another user stays text in Excel | `StatementTest.theCsvOpensSafelyInASpreadsheet` |
 | Statements left in caches | Downloads are sent with `Cache-Control: no-store` | `StatementTest` |
+| Account takeover draining the balance | Fraud rules hold large, new-payee, rapid or night transfers; the money is reserved until a human decides | `FraudTest` |
+| Insider approving their own transfer | Self-review is refused; the alert row lock lets exactly one decision win | `FraudTest.anAdminCannotApproveTheirOwnTransfer`, `twoAdminsDecidingTheSameAlertAtOnceCannotBothWin` |
 | IDOR (reading someone else's account) | The owner is part of the database query; another user's account and a non-existent one give the identical `404` | `AccountTest.anotherUsersAccountLooksExactlyLikeOneThatDoesNotExist` |
 | Privilege escalation | Registration ignores any `role` field; the first admin comes only from `ADMIN_EMAIL`/`ADMIN_PASSWORD`; admins cannot change their own role | `AuthenticationTest`, `RoleTest` |
 | Insider abuse | Separation of duties: `ADMIN` manages users but cannot read the audit trail; `AUDITOR` reads it and nothing else | `RoleTest` |
@@ -201,7 +241,7 @@ mvn spring-boot:run
 mvn verify
 ```
 
-78 tests, all against a real PostgreSQL 16 (never H2): Testcontainers starts it when Docker is available
+95 tests, all against a real PostgreSQL 16 (never H2): Testcontainers starts it when Docker is available
 (always in CI), otherwise [embedded-postgres](https://github.com/zonkyio/embedded-postgres) runs the same
 PostgreSQL 16 binaries as a local process. CI fails if any test was skipped.
 
@@ -234,7 +274,7 @@ PostgreSQL 16 binaries as a local process. CI fails if any test was skipped.
       100-request concurrency test, reconciliation
 - [x] **Phase 3: Top-up and statements.** Virtual accounts, HMAC-SHA256 signed webhooks with replay
       protection, paginated statements, CSV/PDF export
-- [ ] **Phase 4: Fraud and audit.** Rule-based fraud detection, `ON_HOLD` review flow, audit endpoints
+- [x] **Phase 4: Fraud and audit.** Rule-based fraud detection, `ON_HOLD` review flow, audit endpoints
 - [ ] **Phase 5: Hardening.** Rate limiting, security headers, dependency scanning, `SECURITY.md` mapped
       to the OWASP Top 10
 

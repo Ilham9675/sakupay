@@ -50,20 +50,46 @@ public class LedgerTransaction {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    @Column(name = "updated_at")
+    private Instant updatedAt;
+
     protected LedgerTransaction() {
     }
 
-    LedgerTransaction(TransactionType type, long amount, Long sourceAccountId, Long destinationAccountId,
-                      String description, Long initiatedBy, Instant createdAt) {
+    LedgerTransaction(TransactionType type, TransactionStatus status, long amount, Long sourceAccountId,
+                      Long destinationAccountId, String description, Long initiatedBy, Instant createdAt) {
         this.reference = UUID.randomUUID().toString();
         this.type = type;
-        this.status = TransactionStatus.COMPLETED;
+        this.status = status;
         this.amount = amount;
         this.sourceAccountId = sourceAccountId;
         this.destinationAccountId = destinationAccountId;
         this.description = description;
         this.initiatedBy = initiatedBy;
         this.createdAt = createdAt;
+    }
+
+    /** A held transaction is either released to the receiver or returned; nothing else can change its status. */
+    void complete(Instant now) {
+        requireOnHold();
+        this.status = TransactionStatus.COMPLETED;
+        this.updatedAt = now;
+    }
+
+    void reject(Instant now) {
+        requireOnHold();
+        this.status = TransactionStatus.REJECTED;
+        this.updatedAt = now;
+    }
+
+    private void requireOnHold() {
+        if (status != TransactionStatus.ON_HOLD) {
+            throw new IllegalStateException("Transaction " + reference + " is " + status + ", not ON_HOLD");
+        }
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
     }
 
     public Long getId() {

@@ -118,10 +118,10 @@ class StatementTest {
         String[] rows = csv.substring(1).split("\r\n");   // skip the byte-order mark
 
         assertThat(rows).hasSize(5);
-        assertThat(rows[0]).isEqualTo("\"Date\",\"Reference\",\"Type\",\"Direction\",\"Amount\",\"Balance after\",\"Counterparty\",\"Description\"");
+        assertThat(rows[0]).isEqualTo("\"Date\",\"Reference\",\"Type\",\"Status\",\"Direction\",\"Amount\",\"Balance after\",\"Counterparty\",\"Description\"");
         // Bob could type a formula as a transfer description; in Alice's spreadsheet it must stay plain text
         assertThat(rows[3]).endsWith(",\"'=HYPERLINK(\"\"http://evil.example\"\",\"\"Click\"\")\"");
-        assertThat(rows[3]).contains("\"DEBIT\",\"300000\",\"900000\",\"" + b + "\"");
+        assertThat(rows[3]).contains("\"COMPLETED\",\"DEBIT\",\"300000\",\"900000\",\"" + b + "\"");
     }
 
     @Test

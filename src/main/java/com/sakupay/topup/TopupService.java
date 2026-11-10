@@ -108,7 +108,7 @@ public class TopupService {
                         "No account has this virtual account number."));
         long settlementId = accounts.findIdByAccountNumberAndType(TransferService.SETTLEMENT_ACCOUNT, AccountType.INTERNAL)
                 .orElseThrow();
-        AccountLocks.Pair locked = locks.lock(settlementId, va.getAccountId());
+        AccountLocks.Locked locked = locks.lock(java.util.List.of(va.getAccountId()), java.util.List.of(settlementId));
         Account customer = locked.get(va.getAccountId());
         if (!customer.isActive()) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "ACCOUNT_INACTIVE", "The account cannot receive money.");

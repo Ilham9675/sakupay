@@ -52,6 +52,15 @@ sakupay:
     webhook-secret: ${TOPUP_WEBHOOK_SECRET:}
     # Webhooks older (or newer) than this are refused, so a captured request cannot be replayed later
     timestamp-tolerance: 5m
+  fraud:
+    # A transfer that hits any rule is held (money reserved) until an admin approves or rejects it
+    large-amount: 5000000          # Rp5.000.000 or more in one transfer
+    new-payee-amount: 2000000      # Rp2.000.000 or more to someone never paid before
+    velocity-max-transfers: 5      # a 6th transfer within the window...
+    velocity-window: 10m           # ...of 10 minutes
+    night-start: "00:00"           # Rp1.000.000 or more between 00:00 and 04:00 (business zone)
+    night-end: "04:00"
+    night-amount: 1000000
   accounts:
     max-per-user: 3
     default-daily-limit: 10000000   # Rp10.000.000 per day

@@ -15,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -42,6 +43,12 @@ public class TransferController {
             @RequestHeader(name = IDEMPOTENCY_KEY, required = false) String idempotencyKey,
             @Valid @RequestBody TransferRequest request) {
         return created(transferService.transfer(CurrentUser.id(jwt), idempotencyKey, request));
+    }
+
+    @GetMapping("/api/v1/transfers/{reference}")
+    @Operation(summary = "Current status of a transfer I made (e.g. ON_HOLD -> COMPLETED or REJECTED)")
+    public TransactionResponse find(@AuthenticationPrincipal Jwt jwt, @PathVariable String reference) {
+        return transferService.find(CurrentUser.id(jwt), reference);
     }
 
     @PostMapping("/api/v1/admin/accounts/{accountNumber}/deposits")

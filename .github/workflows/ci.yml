@@ -109,6 +109,22 @@ jobs:
           curl -fs "$base/accounts/$account/statement" -H "Authorization: Bearer $token" | jq -e '.totalLines == 4'
           curl -fs "$base/accounts/$account/statement.csv" -H "Authorization: Bearer $token" | grep -q '"TOPUP"'
           curl -fs "$base/accounts/$account/statement.pdf" -H "Authorization: Bearer $token" | head -c 5 | grep -q '%PDF-'
+      - name: A large transfer is held and released by an admin
+        run: |
+          base=http://localhost:8080/api/v1
+          json='Content-Type: application/json'
+          b=$(curl -fs "$base/accounts" -H "Authorization: Bearer $token" | jq -r '.[1].accountNumber')
+          curl -fs -X POST "$base/admin/accounts/$account/deposits" -H "Authorization: Bearer $admin" -H "$json" \
+            -H "Idempotency-Key: ci-deposit-2" -d '{"amount":6000000}'
+          body="{\"sourceAccount\":\"$account\",\"destinationAccount\":\"$b\",\"amount\":6000000,\"pin\":\"246810\"}"
+          ref=$(curl -fs -X POST $base/transfers -H "Authorization: Bearer $token" -H "$json" \
+            -H "Idempotency-Key: ci-transfer-large" -d "$body" | jq -er 'select(.status == "ON_HOLD") | .reference')
+          alert=$(curl -fs "$base/fraud-alerts?status=OPEN" -H "Authorization: Bearer $admin" \
+            | jq -er --arg ref "$ref" '.content[] | select(.transactionReference == $ref) | .id')
+          curl -fs -X POST "$base/admin/fraud-alerts/$alert/approve" -H "Authorization: Bearer $admin" -H "$json" \
+            -d '{"note":"CI approval"}' | jq -e '.status == "APPROVED"'
+          curl -fs "$base/transfers/$ref" -H "Authorization: Bearer $token" | jq -e '.status == "COMPLETED"'
+          curl -fs "$base/accounts/$b" -H "Authorization: Bearer $token" | jq -e '.balance == 6040000'
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

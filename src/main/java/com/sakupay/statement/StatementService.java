@@ -3,6 +3,7 @@ package com.sakupay.statement;
 import com.sakupay.account.AccountRepository;
 import com.sakupay.common.error.ApiException;
 import com.sakupay.ledger.EntryDirection;
+import com.sakupay.ledger.TransactionStatus;
 import com.sakupay.ledger.TransactionType;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -30,13 +31,17 @@ public class StatementService {
     static final int MAX_DAYS = 366;
     static final int MAX_EXPORT_LINES = 10_000;
 
+    /**
+     * The counterparty is the other end of the business transaction (sender or receiver), not the other ledger
+     * entry: a held transfer has more than two entries, and its HOLD leg is not something a customer should see.
+     */
     private static final String LINES = """
-            SELECT e.created_at, t.reference, t.type, e.direction, e.amount, e.balance_after, t.description,
+            SELECT e.created_at, t.reference, t.type, t.status, e.direction, e.amount, e.balance_after, t.description,
                    CASE WHEN ca.type = 'CUSTOMER' THEN ca.account_number END AS counterparty
             FROM ledger_entries e
             JOIN transactions t ON t.id = e.transaction_id
-            JOIN ledger_entries c ON c.transaction_id = e.transaction_id AND c.id <> e.id
-            JOIN accounts ca ON ca.id = c.account_id
+            JOIN accounts ca ON ca.id = CASE WHEN e.account_id = t.source_account_id
+                                             THEN t.destination_account_id ELSE t.source_account_id END
             WHERE e.account_id = ? AND e.created_at >= ? AND e.created_at < ?
             ORDER BY e.id
             LIMIT ? OFFSET ?
@@ -58,8 +63,10 @@ public class StatementService {
     public record Period(LocalDate from, LocalDate to) {
     }
 
-    public record Line(Instant date, String reference, TransactionType type, EntryDirection direction, long amount,
-                       long balanceAfter, String description, String counterparty) {
+    /** {@code status} is the transaction's current status, e.g. a debit that is still ON_HOLD or was REJECTED. */
+    public record Line(Instant date, String reference, TransactionType type, TransactionStatus status,
+                       EntryDirection direction, long amount, long balanceAfter, String description,
+                       String counterparty) {
     }
 
     public record Statement(String accountNumber, LocalDate from, LocalDate to, ZoneId timeZone,
@@ -97,8 +104,8 @@ public class StatementService {
                 """, accountId, start, end);
         List<Line> lines = jdbc.query(LINES, (rs, i) -> new Line(
                         rs.getTimestamp(1).toInstant(), rs.getString(2), TransactionType.valueOf(rs.getString(3)),
-                        EntryDirection.valueOf(rs.getString(4)), rs.getLong(5), rs.getLong(6), rs.getString(7),
-                        rs.getString(8)),
+                        TransactionStatus.valueOf(rs.getString(4)), EntryDirection.valueOf(rs.getString(5)),
+                        rs.getLong(6), rs.getLong(7), rs.getString(8), rs.getString(9)),
                 accountId, start, end, size, (long) page * size);
 
         return new Statement(accountNumber, period.from(), period.to(), zone, opening, closing,

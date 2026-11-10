@@ -8,10 +8,15 @@ import com.sakupay.account.AccountType;
 import com.sakupay.audit.AuditAction;
 import com.sakupay.audit.AuditService;
 import com.sakupay.common.error.ApiException;
+import com.sakupay.fraud.FraudProperties;
+import com.sakupay.fraud.FraudReviewService;
+import com.sakupay.fraud.FraudRule;
+import com.sakupay.fraud.FraudRules;
 import com.sakupay.ledger.LedgerEntryRepository;
 import com.sakupay.ledger.LedgerService;
 import com.sakupay.ledger.LedgerTransaction;
 import com.sakupay.ledger.LedgerTransactionRepository;
+import com.sakupay.ledger.TransactionStatus;
 import com.sakupay.ledger.TransactionType;
 import com.sakupay.transfer.TransferDtos.TransactionResponse;
 import com.sakupay.transfer.TransferDtos.TransferRequest;
@@ -30,6 +35,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -41,7 +48,8 @@ import java.util.Optional;
  *   <li>PIN check in its own short transaction, so a wrong PIN is counted even though the transfer fails,
  *       and no request ever holds two database connections at once.</li>
  *   <li>One database transaction: claim the idempotency key, lock both accounts in ascending id order
- *       (two opposite transfers can never deadlock), check status, balance and daily limit, post to the ledger.</li>
+ *       (two opposite transfers can never deadlock), check status, balance and daily limit, run the fraud rules,
+ *       then either post to the ledger or move the money to HOLD and open a fraud alert.</li>
  * </ol>
  */
 @Service
@@ -56,6 +64,9 @@ public class TransferService {
     private final LedgerEntryRepository entries;
     private final IdempotencyStore idempotency;
     private final PinService pinService;
+    private final FraudRules fraudRules;
+    private final FraudProperties fraudProperties;
+    private final FraudReviewService fraudReviews;
     private final AuditService audit;
     private final TransactionTemplate inTransaction;
     private final Clock clock;
@@ -63,6 +74,7 @@ public class TransferService {
 
     TransferService(AccountRepository accounts, AccountLocks locks, LedgerService ledger, LedgerTransactionRepository transactions,
                     LedgerEntryRepository entries, IdempotencyStore idempotency, PinService pinService,
+                    FraudRules fraudRules, FraudProperties fraudProperties, FraudReviewService fraudReviews,
                     AuditService audit, PlatformTransactionManager transactionManager, Clock clock,
                     @Value("${sakupay.business-zone}") ZoneId businessZone) {
         this.accounts = accounts;
@@ -72,6 +84,9 @@ public class TransferService {
         this.entries = entries;
         this.idempotency = idempotency;
         this.pinService = pinService;
+        this.fraudRules = fraudRules;
+        this.fraudProperties = fraudProperties;
+        this.fraudReviews = fraudReviews;
         this.audit = audit;
         this.inTransaction = new TransactionTemplate(transactionManager);
         this.clock = clock;
@@ -106,7 +121,7 @@ public class TransferService {
                     .orElseThrow(() -> ApiException.notFound("ACCOUNT_NOT_FOUND", "Account not found."));
             long destinationId = accounts.findIdByAccountNumberAndType(request.destinationAccount(), AccountType.CUSTOMER)
                     .orElseThrow(() -> ApiException.notFound("DESTINATION_NOT_FOUND", "The destination account does not exist."));
-            AccountLocks.Pair locked = locks.lock(sourceId, destinationId);
+            AccountLocks.Locked locked = locks.lock(List.of(sourceId, destinationId), List.of());
             Account source = locked.get(sourceId);
             Account destination = locked.get(destinationId);
 
@@ -128,11 +143,28 @@ public class TransferService {
                         .with("remainingToday", Math.max(0, source.getDailyTransferLimit() - usedToday));
             }
 
-            LedgerTransaction tx = ledger.post(TransactionType.TRANSFER, source, destination, amount, description, userId);
+            // Fraud rules see consistent facts: the sender's account is locked, so no other transfer from it can
+            // slip in between counting and deciding
+            Instant now = Instant.now(clock);
+            List<FraudRule> hits = fraudRules.evaluate(amount, now,
+                    transactions.countTransfersSince(source.getId(), now.minus(fraudProperties.velocityWindow())),
+                    transactions.existsBySourceAccountIdAndDestinationAccountIdAndTypeAndStatus(source.getId(),
+                            destination.getId(), TransactionType.TRANSFER, TransactionStatus.COMPLETED));
+            String route = source.getAccountNumber() + "->" + destination.getAccountNumber() + " amount=" + amount;
+            LedgerTransaction tx;
+            if (hits.isEmpty()) {
+                tx = ledger.post(TransactionType.TRANSFER, source, destination, amount, description, userId);
+                audit.record(AuditService.user(userId), AuditAction.TRANSFER_COMPLETED, "transaction:" + tx.getReference(), route);
+            } else {
+                // Internal accounts are always locked after customer accounts (see AccountLocks)
+                Account hold = locks.lockInternal(fraudReviews.holdAccountId());
+                tx = ledger.hold(source, hold, destination, amount, description, userId);
+                fraudReviews.open(tx.getId(), hits);
+                audit.record(AuditService.user(userId), AuditAction.TRANSFER_HELD, "transaction:" + tx.getReference(),
+                        route + " rules=" + hits);
+            }
             idempotency.complete(userId, idempotencyKey, tx.getId());
-            audit.record(AuditService.user(userId), AuditAction.TRANSFER_COMPLETED, "transaction:" + tx.getReference(),
-                    source.getAccountNumber() + "->" + destination.getAccountNumber() + " amount=" + amount);
-            return new Outcome(toResponse(tx, source.getId(), source.getBalance()), false);
+            return new Outcome(toResponse(tx, source.getBalance()), false);
         });
     }
 
@@ -151,7 +183,7 @@ public class TransferService {
                     .orElseThrow(() -> ApiException.notFound("ACCOUNT_NOT_FOUND", "Account not found."));
             long settlementId = accounts.findIdByAccountNumberAndType(SETTLEMENT_ACCOUNT, AccountType.INTERNAL)
                     .orElseThrow();
-            AccountLocks.Pair locked = locks.lock(settlementId, customerId);
+            AccountLocks.Locked locked = locks.lock(List.of(customerId), List.of(settlementId));
             Account customer = locked.get(customerId);
             if (!customer.isActive()) {
                 throw ApiException.conflict("ACCOUNT_INACTIVE", "The account cannot receive money.");
@@ -162,23 +194,38 @@ public class TransferService {
             idempotency.complete(adminId, idempotencyKey, tx.getId());
             audit.record(AuditService.user(adminId), AuditAction.DEPOSIT_COMPLETED, "transaction:" + tx.getReference(),
                     "to " + accountNumber + " amount=" + amount);
-            return new Outcome(toResponse(tx, customer.getId(), customer.getBalance()), false);
+            return new Outcome(toResponse(tx, customer.getBalance()), false);
         });
     }
 
-    /** Rebuilds the original response from the stored transaction, so a retry gets exactly the same answer. */
-    private Outcome replay(long transactionId, boolean replayed) {
-        LedgerTransaction tx = transactions.findById(transactionId).orElseThrow();
-        long actingAccount = tx.getType() == TransactionType.DEPOSIT ? tx.getDestinationAccountId() : tx.getSourceAccountId();
-        long balanceAfter = entries.findByTransactionIdAndAccountId(tx.getId(), actingAccount).orElseThrow().getBalanceAfter();
-        return new Outcome(toResponse(tx, actingAccount, balanceAfter), replayed);
+    /**
+     * The current state of a transfer the caller made: lets a client follow a held transfer to COMPLETED or REJECTED.
+     * Transfers of other users are "not found".
+     */
+    public TransactionResponse find(long userId, String reference) {
+        return transactions.findByReference(reference)
+                .filter(t -> t.getType() == TransactionType.TRANSFER && Objects.equals(t.getInitiatedBy(), userId))
+                .map(t -> replay(t.getId(), false).transaction())
+                .orElseThrow(() -> ApiException.notFound("TRANSACTION_NOT_FOUND", "Transaction not found."));
     }
 
-    private TransactionResponse toResponse(LedgerTransaction tx, long actingAccountId, long balanceAfter) {
+    /**
+     * Rebuilds the response from the stored transaction, so a retry gets the same answer. The status is the
+     * current one: a retried held transfer shows COMPLETED once an admin approved it.
+     */
+    private Outcome replay(long transactionId, boolean replayed) {
+        LedgerTransaction tx = transactions.findById(transactionId).orElseThrow();
+        long actingAccount = tx.getType() == TransactionType.TRANSFER ? tx.getSourceAccountId() : tx.getDestinationAccountId();
+        long balanceAfter = entries.findFirstByTransactionIdAndAccountIdOrderById(tx.getId(), actingAccount)
+                .orElseThrow().getBalanceAfter();
+        return new Outcome(toResponse(tx, balanceAfter), replayed);
+    }
+
+    private TransactionResponse toResponse(LedgerTransaction tx, long balanceAfter) {
         String source = accounts.findById(tx.getSourceAccountId()).orElseThrow().getAccountNumber();
         String destination = accounts.findById(tx.getDestinationAccountId()).orElseThrow().getAccountNumber();
         return new TransactionResponse(tx.getReference(), tx.getType(), tx.getStatus(), tx.getAmount(), source,
-                destination, tx.getDescription(), balanceAfter, tx.getCreatedAt());
+                destination, tx.getDescription(), balanceAfter, tx.getCreatedAt(), fraudReviews.reasons(tx.getId()));
     }
 
     private Instant startOfBusinessDay() {

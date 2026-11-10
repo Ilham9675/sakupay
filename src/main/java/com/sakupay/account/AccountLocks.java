@@ -4,10 +4,16 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.TreeSet;
+
 /**
- * Locks two accounts for a money movement, always the lower id first. Every code path that moves money uses this,
- * so two movements touching the same pair (A->B and B->A, or a transfer and a top-up) wait for each other
- * instead of deadlocking.
+ * Locks accounts for a money movement in one global order: customer accounts first, by ascending id, then internal
+ * accounts (SETTLEMENT, HOLD), also by ascending id. Every code path that moves money follows it, so no two
+ * movements can ever wait for each other in a circle (deadlock): A->B against B->A, a transfer put on hold
+ * against an admin releasing another hold, a top-up against a transfer.
  */
 @Component
 public class AccountLocks {
@@ -18,18 +24,40 @@ public class AccountLocks {
         this.accounts = accounts;
     }
 
+    /** Locks the given customer accounts, then the given internal accounts. */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Pair lock(long first, long second) {
-        long low = Math.min(first, second);
-        long high = Math.max(first, second);
-        Account lowAccount = accounts.findByIdForUpdate(low).orElseThrow();
-        Account highAccount = accounts.findByIdForUpdate(high).orElseThrow();
-        return new Pair(lowAccount, highAccount);
+    public Locked lock(Collection<Long> customerIds, Collection<Long> internalIds) {
+        Locked locked = new Locked(new HashMap<>());
+        for (long id : new TreeSet<>(customerIds)) {
+            locked.add(accounts.findByIdForUpdate(id).orElseThrow());
+        }
+        for (long id : new TreeSet<>(internalIds)) {
+            locked.add(accounts.findByIdForUpdate(id).orElseThrow());
+        }
+        return locked;
     }
 
-    public record Pair(Account a, Account b) {
+    /**
+     * Adds one internal account to a set of already locked customer accounts. Allowed because internal accounts
+     * always come last in the order.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Account lockInternal(long internalId) {
+        return accounts.findByIdForUpdate(internalId).orElseThrow();
+    }
+
+    public record Locked(Map<Long, Account> byId) {
+
+        private void add(Account account) {
+            byId.put(account.getId(), account);
+        }
+
         public Account get(long id) {
-            return a.getId() == id ? a : b;
+            Account account = byId.get(id);
+            if (account == null) {
+                throw new IllegalStateException("Account " + id + " was not locked");
+            }
+            return account;
         }
     }
 }

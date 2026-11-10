@@ -1,5 +1,6 @@
 package com.sakupay.transfer;
 
+import com.sakupay.fraud.FraudRule;
 import com.sakupay.ledger.TransactionStatus;
 import com.sakupay.ledger.TransactionType;
 
@@ -11,6 +12,7 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
 import java.time.Instant;
+import java.util.List;
 
 public final class TransferDtos {
 
@@ -40,10 +42,11 @@ public final class TransferDtos {
 
     /**
      * The result of a money movement. {@code balanceAfter} is the balance of the account the caller acted on
-     * (the source of a transfer, the destination of a deposit) right after this transaction.
+     * (the source of a transfer, the destination of a deposit) right after this transaction. A transfer stopped by
+     * fraud rules has status ON_HOLD and lists the rules in {@code holdReasons}; its amount is already reserved.
      */
     public record TransactionResponse(String reference, TransactionType type, TransactionStatus status, long amount,
                                       String sourceAccount, String destinationAccount, String description,
-                                      long balanceAfter, Instant createdAt) {
+                                      long balanceAfter, Instant createdAt, List<FraudRule> holdReasons) {
     }
 }

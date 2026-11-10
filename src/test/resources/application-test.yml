@@ -5,6 +5,12 @@ sakupay:
     bcrypt-strength: 4
   topup:
     webhook-secret: test-only-webhook-secret-32-bytes-min
+  fraud:
+    # Most tests move money quickly and at any hour: keep the velocity and night rules out of their way.
+    # FraudTest switches them on explicitly.
+    velocity-max-transfers: 1000
+    night-start: "00:00"
+    night-end: "00:00"
   bootstrap:
     admin-email: admin@test.local
     admin-password: test-admin-password-123
