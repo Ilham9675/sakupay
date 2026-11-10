@@ -12,7 +12,10 @@ import jakarta.persistence.Version;
 
 import java.time.Instant;
 
-/** A rupiah account. The balance is a whole number of rupiah; it only changes through the ledger (phase 2). */
+/**
+ * A rupiah account. The balance is a whole number of rupiah and only changes through ledger postings
+ * ({@link #debit} / {@link #credit}), always while the row is locked.
+ */
 @Entity
 @Table(name = "accounts")
 public class Account {
@@ -40,6 +43,10 @@ public class Account {
     @Column(nullable = false)
     private AccountStatus status;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private AccountType type;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -56,7 +63,33 @@ public class Account {
         this.balance = 0;
         this.dailyTransferLimit = dailyTransferLimit;
         this.status = AccountStatus.ACTIVE;
+        this.type = AccountType.CUSTOMER;
         this.createdAt = createdAt;
+    }
+
+    /** Takes money out. A customer account can never go below zero (the database enforces it too). */
+    public void debit(long amount) {
+        requirePositive(amount);
+        if (type == AccountType.CUSTOMER && balance < amount) {
+            throw new IllegalStateException("Insufficient balance on " + accountNumber);
+        }
+        balance = Math.subtractExact(balance, amount);
+    }
+
+    /** Puts money in. */
+    public void credit(long amount) {
+        requirePositive(amount);
+        balance = Math.addExact(balance, amount);
+    }
+
+    public boolean isActive() {
+        return status == AccountStatus.ACTIVE;
+    }
+
+    private static void requirePositive(long amount) {
+        if (amount <= 0) {
+            throw new IllegalArgumentException("Amount must be positive");
+        }
     }
 
     public Long getId() {
@@ -85,6 +118,10 @@ public class Account {
 
     public AccountStatus getStatus() {
         return status;
+    }
+
+    public AccountType getType() {
+        return type;
     }
 
     public Instant getCreatedAt() {

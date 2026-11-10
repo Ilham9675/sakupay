@@ -6,7 +6,7 @@ A digital wallet / mini core banking backend built with Spring Boot. The focus i
 system moves money: a double-entry ledger, transfers that are idempotent and safe under concurrency,
 signed top-up webhooks, fraud rules and an audit trail that cannot be rewritten.
 
-> **Status: Phase 1 (accounts and security) done.** The project is built in public, phase by phase. See the roadmap below.
+> **Status: Phase 2 (ledger and transfers) done.** The project is built in public, phase by phase. See the roadmap below.
 
 ## Goals
 
@@ -48,10 +48,13 @@ with a stable `code` field (e.g. `WRONG_PIN`, `PIN_LOCKED`, `ACCOUNT_NOT_FOUND`)
 | POST | `/me/pin/verify` | logged in | Check the PIN; counts towards the lockout |
 | POST / GET | `/accounts` | logged in | Open an account (needs a PIN, max 3) / list own accounts |
 | GET | `/accounts/{number}` | owner only | One account; anyone else gets `404` |
+| POST | `/transfers` | owner of the source account | Transfer (PIN, balance, daily limit); needs an `Idempotency-Key` header |
 | GET | `/admin/users` | `ADMIN` | List users |
+| POST | `/admin/accounts/{number}/deposits` | `ADMIN` | Record a cash deposit at a teller (idempotent) |
 | PUT | `/admin/users/{id}/role` | `ADMIN` | Change a role (not one's own) |
 | POST | `/admin/users/{id}/pin-unlock` | `ADMIN` | Unlock a locked PIN |
 | GET | `/audit-logs` | `AUDITOR` | Search the audit trail |
+| GET | `/reconciliation` | `AUDITOR` | Prove that balances match the ledger and all money sums to zero |
 
 Try it in Swagger UI: log in, press **Authorize** and paste the `accessToken`.
 
@@ -59,6 +62,44 @@ Try it in Swagger UI: log in, press **Authorize** and paste the `accessToken`.
 curl -X POST localhost:8080/api/v1/auth/register -H 'Content-Type: application/json'   -d '{"fullName":"Siti Rahma","email":"siti@example.com","phone":"081234567890","password":"Rahasia123"}'
 curl -X POST localhost:8080/api/v1/auth/login -H 'Content-Type: application/json'   -d '{"email":"siti@example.com","password":"Rahasia123"}'
 ```
+
+## How money moves
+
+```
+POST /transfers  (Idempotency-Key: 7f3c...)
+  1. cheap checks       key format, Luhn check digit of the destination, not the same account
+  2. PIN                own short transaction; wrong PINs count even though the transfer fails
+  3. one DB transaction
+     a. claim key       INSERT ... ON CONFLICT DO NOTHING  -> same key? return the stored result
+     b. lock accounts   SELECT ... FOR UPDATE, lower id first (A->B and B->A cannot deadlock)
+     c. check           active, balance >= amount, today's transfers + amount <= daily limit
+     d. post            DEBIT source, CREDIT destination, update both balances
+     e. COMMIT          a deferred trigger rejects the commit if debits != credits
+```
+
+**Double-entry ledger.** Every transaction is at least two `ledger_entries` (one `DEBIT`, one `CREDIT`) of the same
+amount. The `balance` column is a cache that is updated in the same transaction and can always be recomputed from
+the entries. Cash deposits come from an internal `SETTLEMENT` account, so the sum of all balances in the system is
+always exactly **zero**; `GET /reconciliation` checks this together with every account's balance against its entries.
+
+**What the database enforces on its own** (proven by `LedgerIntegrityTest`, even for SQL that bypasses the app):
+- a transaction whose debits and credits differ cannot be committed,
+- ledger entries cannot be updated or deleted,
+- a customer balance cannot go below zero.
+
+### Concurrency results
+
+`ConcurrentTransferTest` sends real HTTP requests to the running server (Tomcat, HikariCP with 10 connections,
+PostgreSQL 16), all released at the same instant:
+
+| Scenario | Result |
+|---|---|
+| 100 transfers of Rp10.000 from an account holding Rp500.000 | exactly 50 succeed, 50 get `INSUFFICIENT_FUNDS`; final balance 0, never negative; the 50 responses report 50 different balances (490.000 ... 0) |
+| 50 transfers A->B and 50 B->A at the same time | all 100 succeed, no deadlock, both balances unchanged |
+| The same request with the same `Idempotency-Key` sent 10 times at once | all 10 get `201` with the same reference, money moves once, 9 carry `Idempotent-Replayed: true` |
+
+100 concurrent requests finish in about 4 seconds on a laptop; the test passed 5 runs out of 5.
+After each scenario the reconciliation report must still be healthy.
 
 ## Security design
 
@@ -70,6 +111,10 @@ curl -X POST localhost:8080/api/v1/auth/login -H 'Content-Type: application/json
 | User enumeration at login | Unknown e-mail and wrong password give the same response and take the same time (a dummy BCrypt check runs) | `AuthenticationTest.wrongPasswordAndUnknownEmailLookExactlyTheSame` |
 | PIN guessing | 5 wrong PINs in a row lock the PIN for 30 minutes or until an admin unlocks it. The user row is locked (`SELECT ... FOR UPDATE`), so 20 parallel guesses still count one by one | `PinTest.parallelGuessesCannotGetPastTheLimit` |
 | Lockout bypass via rollback | PIN attempts are committed in their own transaction (`REQUIRES_NEW`), so a failing transfer cannot roll the counter back | `PinService.verify` |
+| Double spending by retries | `Idempotency-Key` claimed in the same DB transaction as the transfer; a concurrent duplicate waits on the unique index and gets the stored result | `ConcurrentTransferTest.theSameRequestSentTenTimesAtOnceMovesMoneyOnce` |
+| Overdraft through a race | Both accounts are row-locked before the balance is checked; customer balances also have a `CHECK (balance >= 0)` | `ConcurrentTransferTest.hundredSimultaneousTransfersNeverOverdrawTheAccount` |
+| Tampering with history | Ledger entries are insert-only and every transaction must balance, enforced by database triggers | `LedgerIntegrityTest` |
+| Moving money from someone else's account | The source account is looked up together with the owner from the token | `TransferTest.invalidTransfersAreRejectedBeforeMoneyMoves` |
 | IDOR (reading someone else's account) | The owner is part of the database query; another user's account and a non-existent one give the identical `404` | `AccountTest.anotherUsersAccountLooksExactlyLikeOneThatDoesNotExist` |
 | Privilege escalation | Registration ignores any `role` field; the first admin comes only from `ADMIN_EMAIL`/`ADMIN_PASSWORD`; admins cannot change their own role | `AuthenticationTest`, `RoleTest` |
 | Insider abuse | Separation of duties: `ADMIN` manages users but cannot read the audit trail; `AUDITOR` reads it and nothing else | `RoleTest` |
@@ -115,7 +160,7 @@ DB_PASSWORD=change-me-local-only JWT_SECRET=local-dev-only-replace-with-openssl-
 mvn verify
 ```
 
-47 tests, all against a real PostgreSQL 16 (never H2): Testcontainers starts it when Docker is available
+59 tests, all against a real PostgreSQL 16 (never H2): Testcontainers starts it when Docker is available
 (always in CI), otherwise [embedded-postgres](https://github.com/zonkyio/embedded-postgres) runs the same
 PostgreSQL 16 binaries as a local process. CI fails if any test was skipped.
 
@@ -131,6 +176,11 @@ PostgreSQL 16 binaries as a local process. CI fails if any test was skipped.
 - **No secrets in the repository.** Credentials come from environment variables; `.env` is ignored.
 - **Money is never a floating-point number.** Balances and limits are `BIGINT` rupiah, and the database
   rejects a negative balance with a `CHECK` constraint.
+- **Idempotency without an "in progress" state.** Because the key is claimed inside the transfer's own
+  transaction, a failed transfer releases its key (the client may retry it) and a duplicate arriving mid-flight
+  simply waits for the first one to finish.
+- **Timestamps at database precision.** The application clock ticks in microseconds, like PostgreSQL, so a replayed
+  response is byte-for-byte identical to the original.
 - **Account numbers have a check digit.** 10 digits (`88` + 7 random + Luhn), so a mistyped digit is caught
   before anything is looked up.
 
@@ -139,7 +189,7 @@ PostgreSQL 16 binaries as a local process. CI fails if any test was skipped.
 - [x] **Phase 0: Foundation.** Spring Boot, PostgreSQL + Flyway, Testcontainers, Docker Compose, CI
 - [x] **Phase 1: Accounts and security.** Registration, JWT access + refresh tokens with rotation, 6-digit PIN
       with lockout, roles (USER / ADMIN / AUDITOR), account opening, IDOR tests
-- [ ] **Phase 2: Ledger and transfers.** Double-entry ledger, idempotency keys, pessimistic locking,
+- [x] **Phase 2: Ledger and transfers.** Double-entry ledger, idempotency keys, pessimistic locking,
       100-request concurrency test, reconciliation
 - [ ] **Phase 3: Top-up and statements.** Virtual accounts, HMAC-SHA256 signed webhooks with replay
       protection, paginated statements, CSV/PDF export

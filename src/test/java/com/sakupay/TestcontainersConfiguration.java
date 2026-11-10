@@ -1,5 +1,6 @@
 package com.sakupay;
 
+import com.zaxxer.hikari.HikariDataSource;
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 
 import org.springframework.boot.test.context.TestConfiguration;
@@ -39,10 +40,14 @@ public class TestcontainersConfiguration {
         return EmbeddedPostgres.builder().start();
     }
 
+    /** Pooled like production (HikariCP, 10 connections), so concurrency tests see the same contention. */
     @Bean
     @Conditional(DockerUnavailable.class)
     DataSource dataSource(EmbeddedPostgres postgres) {
-        return postgres.getPostgresDatabase();
+        HikariDataSource pool = new HikariDataSource();
+        pool.setDataSource(postgres.getPostgresDatabase());
+        pool.setMaximumPoolSize(10);
+        return pool;
     }
 
     static class DockerAvailable implements Condition {

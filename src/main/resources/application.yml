@@ -37,6 +37,8 @@ springdoc:
   paths-to-match: /api/**
 
 sakupay:
+  # Daily limits reset at midnight in this zone
+  business-zone: Asia/Jakarta
   security:
     # Required, at least 32 bytes. Never commit a real value; set JWT_SECRET in the environment / .env
     jwt-secret: ${JWT_SECRET:}

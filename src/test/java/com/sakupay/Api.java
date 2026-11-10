@@ -10,6 +10,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -55,6 +56,39 @@ public class Api {
 
     public Session admin() throws Exception {
         return login(0, ADMIN_EMAIL, ADMIN_PASSWORD);
+    }
+
+    /** Opens an account for a user who already has a PIN and returns its number. */
+    public String openAccount(Session user) throws Exception {
+        return body(post("/api/v1/accounts", user.accessToken(), null).andExpect(status().isCreated()))
+                .get("accountNumber").asText();
+    }
+
+    /** Cash deposit by the bootstrap admin. */
+    public void deposit(String accountNumber, long amount) throws Exception {
+        mvc.perform(withBody(auth(MockMvcRequestBuilders.post("/api/v1/admin/accounts/" + accountNumber + "/deposits"),
+                        admin().accessToken()).header("Idempotency-Key", UUID.randomUUID().toString()),
+                        Map.of("amount", amount)))
+                .andExpect(status().isCreated());
+    }
+
+    public ResultActions transfer(Session user, String key, String from, String to, long amount) throws Exception {
+        return transfer(user, key, from, to, amount, PIN);
+    }
+
+    public ResultActions transfer(Session user, String key, String from, String to, long amount, String pin)
+            throws Exception {
+        MockHttpServletRequestBuilder request = auth(MockMvcRequestBuilders.post("/api/v1/transfers"), user.accessToken());
+        if (key != null) {
+            request.header("Idempotency-Key", key);
+        }
+        return mvc.perform(withBody(request, Map.of("sourceAccount", from, "destinationAccount", to,
+                "amount", amount, "description", "test", "pin", pin)));
+    }
+
+    public long balance(Session owner, String accountNumber) throws Exception {
+        return body(get("/api/v1/accounts/" + accountNumber, owner.accessToken()).andExpect(status().isOk()))
+                .get("balance").asLong();
     }
 
     public Session login(long userId, String email, String password) throws Exception {
