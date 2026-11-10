@@ -22,16 +22,18 @@ public class AccountService {
     private static final int NUMBER_ATTEMPTS = 10;
 
     private final AccountRepository accounts;
+    private final VirtualAccountRepository virtualAccounts;
     private final UserRepository users;
     private final AuditService audit;
     private final Clock clock;
     private final int maxPerUser;
     private final long defaultDailyLimit;
 
-    AccountService(AccountRepository accounts, UserRepository users, AuditService audit, Clock clock,
+    AccountService(AccountRepository accounts, VirtualAccountRepository virtualAccounts, UserRepository users, AuditService audit, Clock clock,
                    @Value("${sakupay.accounts.max-per-user}") int maxPerUser,
                    @Value("${sakupay.accounts.default-daily-limit}") long defaultDailyLimit) {
         this.accounts = accounts;
+        this.virtualAccounts = virtualAccounts;
         this.users = users;
         this.audit = audit;
         this.clock = clock;
@@ -52,7 +54,9 @@ public class AccountService {
         if (accounts.countByOwnerId(userId) >= maxPerUser) {
             throw ApiException.conflict("ACCOUNT_LIMIT_REACHED", "You can have at most " + maxPerUser + " accounts.");
         }
-        Account account = accounts.save(new Account(newAccountNumber(), userId, defaultDailyLimit, Instant.now(clock)));
+        Instant now = Instant.now(clock);
+        Account account = accounts.save(new Account(newAccountNumber(), userId, defaultDailyLimit, now));
+        virtualAccounts.save(new VirtualAccount(account, now));
         audit.record(AuditService.user(userId), AuditAction.ACCOUNT_OPENED, "account:" + account.getAccountNumber(), null);
         return account;
     }

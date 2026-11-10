@@ -48,11 +48,12 @@ public class AccountController {
         return AccountResponse.of(accountService.get(CurrentUser.id(jwt), accountNumber));
     }
 
-    public record AccountResponse(String accountNumber, String currency, long balance, long dailyTransferLimit,
-                                  AccountStatus status, Instant createdAt) {
+    /** {@code virtualAccount}: pay into this number at the partner bank to top up the account. */
+    public record AccountResponse(String accountNumber, String virtualAccount, String currency, long balance,
+                                  long dailyTransferLimit, AccountStatus status, Instant createdAt) {
         static AccountResponse of(Account a) {
-            return new AccountResponse(a.getAccountNumber(), a.getCurrency(), a.getBalance(),
-                    a.getDailyTransferLimit(), a.getStatus(), a.getCreatedAt());
+            return new AccountResponse(a.getAccountNumber(), VirtualAccount.numberFor(a.getAccountNumber()),
+                    a.getCurrency(), a.getBalance(), a.getDailyTransferLimit(), a.getStatus(), a.getCreatedAt());
         }
     }
 }

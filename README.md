@@ -6,7 +6,7 @@ A digital wallet / mini core banking backend built with Spring Boot. The focus i
 system moves money: a double-entry ledger, transfers that are idempotent and safe under concurrency,
 signed top-up webhooks, fraud rules and an audit trail that cannot be rewritten.
 
-> **Status: Phase 2 (ledger and transfers) done.** The project is built in public, phase by phase. See the roadmap below.
+> **Status: Phase 3 (top-ups and statements) done.** The project is built in public, phase by phase. See the roadmap below.
 
 ## Goals
 
@@ -48,6 +48,9 @@ with a stable `code` field (e.g. `WRONG_PIN`, `PIN_LOCKED`, `ACCOUNT_NOT_FOUND`)
 | POST | `/me/pin/verify` | logged in | Check the PIN; counts towards the lockout |
 | POST / GET | `/accounts` | logged in | Open an account (needs a PIN, max 3) / list own accounts |
 | GET | `/accounts/{number}` | owner only | One account; anyone else gets `404` |
+| GET | `/accounts/{number}/statement` | owner only | Statement for a period: opening/closing balance, paginated lines |
+| GET | `/accounts/{number}/statement.csv` / `.pdf` | owner only | Download the statement |
+| POST | `/webhooks/topups` | partner bank (HMAC signature, no JWT) | A payment into a virtual account |
 | POST | `/transfers` | owner of the source account | Transfer (PIN, balance, daily limit); needs an `Idempotency-Key` header |
 | GET | `/admin/users` | `ADMIN` | List users |
 | POST | `/admin/accounts/{number}/deposits` | `ADMIN` | Record a cash deposit at a teller (idempotent) |
@@ -101,6 +104,38 @@ PostgreSQL 16), all released at the same instant:
 100 concurrent requests finish in about 4 seconds on a laptop; the test passed 5 runs out of 5.
 After each scenario the reconciliation report must still be healthy.
 
+## Top-ups from the partner bank
+
+Every account gets a virtual account number (`7008` + account number). A customer pays into it at the partner
+bank, and the bank calls `POST /api/v1/webhooks/topups`:
+
+```
+X-Timestamp: 1762850000
+X-Signature: sha256=<hex HMAC-SHA256 of "1762850000.<raw body>" with the shared secret>
+
+{"eventId":"evt_9f2c...","virtualAccount":"70088812345674","amount":50000,"paidAt":"2026-11-11T08:00:00Z"}
+```
+
+| Check | Why |
+|---|---|
+| HMAC-SHA256 over timestamp **and** raw body, compared in constant time | Nobody without the secret can create money, change the amount or re-date a request |
+| Timestamp within 5 minutes | A captured genuine request cannot be replayed later |
+| `eventId` unique, claimed in the same DB transaction as the credit | Banks deliver "at least once": a repeated delivery gets `DUPLICATE` and credits nothing, even 10 at the same time |
+| The body is parsed only after the signature is verified | Untrusted input never reaches the JSON parser |
+| Every rejected webhook is written to the audit trail | Forgery attempts are visible to auditors |
+
+The partner bank is simulated (no real money). Try it against a running stack:
+
+```bash
+TOPUP_WEBHOOK_SECRET=local-dev-only-webhook-secret-change-me scripts/simulate-topup.sh 70088812345674 50000
+```
+
+## Statements
+
+`GET /accounts/{number}/statement?from=2026-11-01&to=2026-11-30` returns the opening balance, every ledger line
+with its running balance and counterparty, the totals and the closing balance, read in one consistent snapshot.
+Days follow the `Asia/Jakarta` business day. The same statement downloads as CSV (UTF-8 with BOM for Excel) or PDF.
+
 ## Security design
 
 | Threat | Control | Proven by |
@@ -115,6 +150,10 @@ After each scenario the reconciliation report must still be healthy.
 | Overdraft through a race | Both accounts are row-locked before the balance is checked; customer balances also have a `CHECK (balance >= 0)` | `ConcurrentTransferTest.hundredSimultaneousTransfersNeverOverdrawTheAccount` |
 | Tampering with history | Ledger entries are insert-only and every transaction must balance, enforced by database triggers | `LedgerIntegrityTest` |
 | Moving money from someone else's account | The source account is looked up together with the owner from the token | `TransferTest.invalidTransfersAreRejectedBeforeMoneyMoves` |
+| Forged top-up webhook | HMAC-SHA256 signature over timestamp and body, constant-time comparison | `TopupWebhookTest.forgedTamperedAndReplayedWebhooksAreRejectedAndAudited` |
+| Replayed or duplicated webhook | 5-minute timestamp window + unique `eventId` claimed with the credit | `TopupWebhookTest.tenSimultaneousDeliveriesOfOneEventCreditOnce` |
+| CSV / formula injection | Statement cells starting with `= + - @` get a leading apostrophe, so a description like `=HYPERLINK(...)` typed by another user stays text in Excel | `StatementTest.theCsvOpensSafelyInASpreadsheet` |
+| Statements left in caches | Downloads are sent with `Cache-Control: no-store` | `StatementTest` |
 | IDOR (reading someone else's account) | The owner is part of the database query; another user's account and a non-existent one give the identical `404` | `AccountTest.anotherUsersAccountLooksExactlyLikeOneThatDoesNotExist` |
 | Privilege escalation | Registration ignores any `role` field; the first admin comes only from `ADMIN_EMAIL`/`ADMIN_PASSWORD`; admins cannot change their own role | `AuthenticationTest`, `RoleTest` |
 | Insider abuse | Separation of duties: `ADMIN` manages users but cannot read the audit trail; `AUDITOR` reads it and nothing else | `RoleTest` |
@@ -140,7 +179,8 @@ Start only the database, then run the app against it:
 ```bash
 cp .env.example .env
 docker compose up -d db
-DB_PASSWORD=change-me-local-only JWT_SECRET=local-dev-only-replace-with-openssl-rand-base64-48 mvn spring-boot:run
+set -a; . ./.env; set +a   # loads DB_PASSWORD, JWT_SECRET, TOPUP_WEBHOOK_SECRET, ...
+mvn spring-boot:run
 ```
 
 ### Configuration
@@ -151,6 +191,7 @@ DB_PASSWORD=change-me-local-only JWT_SECRET=local-dev-only-replace-with-openssl-
 | `DB_USERNAME` | `sakupay` | Database user |
 | `DB_PASSWORD` | (none) | Database password; never committed, set it in `.env` |
 | `JWT_SECRET` | (none, required) | Signs access tokens; at least 32 bytes (`openssl rand -base64 48`) |
+| `TOPUP_WEBHOOK_SECRET` | (none, required) | Shared with the partner bank to sign top-up webhooks; at least 32 bytes |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | (none) | Creates the first `ADMIN` on startup if that user does not exist |
 | `PORT` | `8080` | HTTP port |
 
@@ -160,7 +201,7 @@ DB_PASSWORD=change-me-local-only JWT_SECRET=local-dev-only-replace-with-openssl-
 mvn verify
 ```
 
-59 tests, all against a real PostgreSQL 16 (never H2): Testcontainers starts it when Docker is available
+78 tests, all against a real PostgreSQL 16 (never H2): Testcontainers starts it when Docker is available
 (always in CI), otherwise [embedded-postgres](https://github.com/zonkyio/embedded-postgres) runs the same
 PostgreSQL 16 binaries as a local process. CI fails if any test was skipped.
 
@@ -191,7 +232,7 @@ PostgreSQL 16 binaries as a local process. CI fails if any test was skipped.
       with lockout, roles (USER / ADMIN / AUDITOR), account opening, IDOR tests
 - [x] **Phase 2: Ledger and transfers.** Double-entry ledger, idempotency keys, pessimistic locking,
       100-request concurrency test, reconciliation
-- [ ] **Phase 3: Top-up and statements.** Virtual accounts, HMAC-SHA256 signed webhooks with replay
+- [x] **Phase 3: Top-up and statements.** Virtual accounts, HMAC-SHA256 signed webhooks with replay
       protection, paginated statements, CSV/PDF export
 - [ ] **Phase 4: Fraud and audit.** Rule-based fraud detection, `ON_HOLD` review flow, audit endpoints
 - [ ] **Phase 5: Hardening.** Rate limiting, security headers, dependency scanning, `SECURITY.md` mapped

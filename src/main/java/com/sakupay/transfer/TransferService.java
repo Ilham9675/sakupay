@@ -1,6 +1,7 @@
 package com.sakupay.transfer;
 
 import com.sakupay.account.Account;
+import com.sakupay.account.AccountLocks;
 import com.sakupay.account.AccountNumbers;
 import com.sakupay.account.AccountRepository;
 import com.sakupay.account.AccountType;
@@ -46,9 +47,10 @@ import java.util.Optional;
 @Service
 public class TransferService {
 
-    static final String SETTLEMENT_ACCOUNT = "1000000001";
+    public static final String SETTLEMENT_ACCOUNT = "1000000001";
 
     private final AccountRepository accounts;
+    private final AccountLocks locks;
     private final LedgerService ledger;
     private final LedgerTransactionRepository transactions;
     private final LedgerEntryRepository entries;
@@ -59,11 +61,12 @@ public class TransferService {
     private final Clock clock;
     private final ZoneId businessZone;
 
-    TransferService(AccountRepository accounts, LedgerService ledger, LedgerTransactionRepository transactions,
+    TransferService(AccountRepository accounts, AccountLocks locks, LedgerService ledger, LedgerTransactionRepository transactions,
                     LedgerEntryRepository entries, IdempotencyStore idempotency, PinService pinService,
                     AuditService audit, PlatformTransactionManager transactionManager, Clock clock,
                     @Value("${sakupay.business-zone}") ZoneId businessZone) {
         this.accounts = accounts;
+        this.locks = locks;
         this.ledger = ledger;
         this.transactions = transactions;
         this.entries = entries;
@@ -103,7 +106,7 @@ public class TransferService {
                     .orElseThrow(() -> ApiException.notFound("ACCOUNT_NOT_FOUND", "Account not found."));
             long destinationId = accounts.findIdByAccountNumberAndType(request.destinationAccount(), AccountType.CUSTOMER)
                     .orElseThrow(() -> ApiException.notFound("DESTINATION_NOT_FOUND", "The destination account does not exist."));
-            Locked locked = lockInOrder(sourceId, destinationId);
+            AccountLocks.Pair locked = locks.lock(sourceId, destinationId);
             Account source = locked.get(sourceId);
             Account destination = locked.get(destinationId);
 
@@ -148,7 +151,7 @@ public class TransferService {
                     .orElseThrow(() -> ApiException.notFound("ACCOUNT_NOT_FOUND", "Account not found."));
             long settlementId = accounts.findIdByAccountNumberAndType(SETTLEMENT_ACCOUNT, AccountType.INTERNAL)
                     .orElseThrow();
-            Locked locked = lockInOrder(settlementId, customerId);
+            AccountLocks.Pair locked = locks.lock(settlementId, customerId);
             Account customer = locked.get(customerId);
             if (!customer.isActive()) {
                 throw ApiException.conflict("ACCOUNT_INACTIVE", "The account cannot receive money.");
@@ -161,21 +164,6 @@ public class TransferService {
                     "to " + accountNumber + " amount=" + amount);
             return new Outcome(toResponse(tx, customer.getId(), customer.getBalance()), false);
         });
-    }
-
-    /** Locks two accounts, always the lower id first: A->B and B->A wait for each other instead of deadlocking. */
-    private Locked lockInOrder(long first, long second) {
-        long low = Math.min(first, second);
-        long high = Math.max(first, second);
-        Account lowAccount = accounts.findByIdForUpdate(low).orElseThrow();
-        Account highAccount = accounts.findByIdForUpdate(high).orElseThrow();
-        return new Locked(lowAccount, highAccount);
-    }
-
-    private record Locked(Account a, Account b) {
-        Account get(long id) {
-            return a.getId() == id ? a : b;
-        }
     }
 
     /** Rebuilds the original response from the stored transaction, so a retry gets exactly the same answer. */

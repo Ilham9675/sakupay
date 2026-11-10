@@ -91,6 +91,24 @@ jobs:
               -H "Idempotency-Key: ci-transfer-1" -d "$body" | jq -e '.balanceAfter == 60000'
           done
           curl -fs "$base/accounts/$b" -H "Authorization: Bearer $token" | jq -e '.balance == 40000'
+          echo "account=$a" >> "$GITHUB_ENV"
+      - name: Top up through the signed bank webhook and download statements
+        run: |
+          set -a; . ./.env; set +a   # TOPUP_WEBHOOK_SECRET, shared with the simulated bank
+          base=http://localhost:8080/api/v1
+          va=$(curl -fs "$base/accounts/$account" -H "Authorization: Bearer $token" | jq -r .virtualAccount)
+          scripts/simulate-topup.sh "$va" 25000 | jq -e '.status == "CREDITED"'
+          # The bank retries the same event: credited once
+          EVENT_ID=ci-event-0001 scripts/simulate-topup.sh "$va" 1000 | jq -e '.status == "CREDITED"'
+          EVENT_ID=ci-event-0001 scripts/simulate-topup.sh "$va" 1000 | jq -e '.status == "DUPLICATE"'
+          # Someone without the secret tries to mint money
+          TOPUP_WEBHOOK_SECRET=forged-secret-forged-secret-forged-secret \
+            scripts/simulate-topup.sh "$va" 999999 | jq -e '.code == "INVALID_SIGNATURE"'
+          # 100.000 deposit - 40.000 transfer + 25.000 + 1.000 top-ups
+          curl -fs "$base/accounts/$account" -H "Authorization: Bearer $token" | jq -e '.balance == 86000'
+          curl -fs "$base/accounts/$account/statement" -H "Authorization: Bearer $token" | jq -e '.totalLines == 4'
+          curl -fs "$base/accounts/$account/statement.csv" -H "Authorization: Bearer $token" | grep -q '"TOPUP"'
+          curl -fs "$base/accounts/$account/statement.pdf" -H "Authorization: Bearer $token" | head -c 5 | grep -q '%PDF-'
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

@@ -47,6 +47,11 @@ sakupay:
     bcrypt-strength: 12
     pin-max-attempts: 5
     pin-lock-duration: 30m
+  topup:
+    # Shared with the partner bank, at least 32 bytes. Set TOPUP_WEBHOOK_SECRET; never commit a real value
+    webhook-secret: ${TOPUP_WEBHOOK_SECRET:}
+    # Webhooks older (or newer) than this are refused, so a captured request cannot be replayed later
+    timestamp-tolerance: 5m
   accounts:
     max-per-user: 3
     default-daily-limit: 10000000   # Rp10.000.000 per day

@@ -3,6 +3,8 @@ sakupay:
     jwt-secret: test-only-secret-at-least-32-bytes-long
     # Low cost keeps the suite fast; production uses 12
     bcrypt-strength: 4
+  topup:
+    webhook-secret: test-only-webhook-secret-32-bytes-min
   bootstrap:
     admin-email: admin@test.local
     admin-password: test-admin-password-123

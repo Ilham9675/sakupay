@@ -43,7 +43,8 @@ public class LedgerTransaction {
 
     private String description;
 
-    @Column(name = "initiated_by", nullable = false)
+    /** The user who started it; null for TOPUP (the partner bank did). */
+    @Column(name = "initiated_by")
     private Long initiatedBy;
 
     @Column(name = "created_at", nullable = false)

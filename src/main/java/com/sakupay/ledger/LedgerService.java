@@ -32,7 +32,7 @@ public class LedgerService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public LedgerTransaction post(TransactionType type, Account from, Account to, long amount, String description,
-                                  long initiatedBy) {
+                                  Long initiatedBy) {
         Instant now = Instant.now(clock);
         from.debit(amount);
         to.credit(amount);
