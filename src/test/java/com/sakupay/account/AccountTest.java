@@ -1,7 +1,7 @@
 package com.sakupay.account;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.sakupay.Api;
 import com.sakupay.Api.Session;
 import com.sakupay.IntegrationTest;
@@ -75,8 +75,8 @@ class AccountTest {
         JsonNode nonExistent = api.body(api.get("/api/v1/accounts/8800000000", bob.accessToken())
                 .andExpect(status().isNotFound()));
         // Same status, code and message; only "instance" (the requested URL) differs
-        ((com.fasterxml.jackson.databind.node.ObjectNode) someoneElses).remove("instance");
-        ((com.fasterxml.jackson.databind.node.ObjectNode) nonExistent).remove("instance");
+        ((tools.jackson.databind.node.ObjectNode) someoneElses).remove("instance");
+        ((tools.jackson.databind.node.ObjectNode) nonExistent).remove("instance");
         assertThat(someoneElses).isEqualTo(nonExistent);
         assertThat(someoneElses.get("code").asText()).isEqualTo("ACCOUNT_NOT_FOUND");
         api.get("/api/v1/accounts", bob.accessToken()).andExpect(jsonPath("$.length()").value(0));

@@ -54,7 +54,7 @@ The project is designed to answer five questions with code and tests:
 
 | Part | Choice |
 |---|---|
-| Language / framework | Java 17, Spring Boot 3.5 |
+| Language / framework | Java 17, Spring Boot 4.1 (Spring Framework 7, Jackson 3, Hibernate 7) |
 | Security | Spring Security, JWT (HS256, Nimbus), BCrypt for passwords and PINs |
 | Database | PostgreSQL 16, schema versioned with **Flyway** (Hibernate only validates) |
 | Tests | JUnit 5, MockMvc, **Testcontainers** (tests run against a real PostgreSQL) |

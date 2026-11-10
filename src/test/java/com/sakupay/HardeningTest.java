@@ -1,6 +1,6 @@
 package com.sakupay;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.sakupay.Api.Session;
 
 import org.junit.jupiter.api.Test;

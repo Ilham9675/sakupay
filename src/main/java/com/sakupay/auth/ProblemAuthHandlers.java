@@ -1,6 +1,6 @@
 package com.sakupay.auth;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.sakupay.common.error.GlobalExceptionHandler;
 
 import jakarta.servlet.http.HttpServletRequest;
