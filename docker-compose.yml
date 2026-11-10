@@ -1,0 +1,33 @@
+# Local stack: PostgreSQL + SakuPay. Copy .env.example to .env first.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sakupay
+      POSTGRES_USER: ${DB_USERNAME:-sakupay}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    ports:
+      # Exposed so the app can also run from the IDE / mvn spring-boot:run
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d sakupay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/sakupay
+      DB_USERNAME: ${DB_USERNAME:-sakupay}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+
+volumes:
+  db-data:
